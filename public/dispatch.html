@@ -1,1 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>911 Command Center</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
+    <style>
+        :root { --fire: #D32F2F; --crash: #F57C00; --medic: #1976D2; --dark: #1a1a1a; --sidebar-width: 400px; }
+        body { margin: 0; font-family: 'Inter', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        #map-container { flex: 1; position: relative; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+        #sidebar { width: var(--sidebar-width); background: white; border-left: 1px solid #ccc; display: flex; flex-direction: column; box-shadow: -5px 0 20px rgba(0,0,0,0.05); z-index: 2; }
+        .dispatch-header { padding: 20px; background: var(--dark); color: white; display: flex; justify-content: space-between; align-items: center; }
+        .brand { font-weight: 800; font-size: 18px; display: flex; align-items: center; gap: 10px; }
+        .live-badge { background: rgba(0, 200, 81, 0.2); color: #00C851; border: 1px solid #00C851; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+        .blink { width: 8px; height: 8px; background: #00C851; border-radius: 50%; animation: pulse 1.5s infinite; }
+        .stats-dock { position: absolute; top: 20px; left: 20px; z-index: 1000; display: flex; gap: 15px; }
+        .stat-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); padding: 10px 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); display: flex; flex-direction: column; align-items: center; min-width: 80px; }
+        .stat-val { font-size: 24px; font-weight: 800; line-height: 1; }
+        .stat-label { font-size: 10px; color: #666; text-transform: uppercase; font-weight: 600; margin-top: 5px; }
+        .feed-container { flex: 1; overflow-y: auto; padding: 15px; background: #f0f2f5; }
+        .ticket { background: white; border-radius: 8px; padding: 16px; margin-bottom: 12px; border-left: 5px solid #ccc; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .ticket.Pending { border-left-color: var(--fire); }
+        .ticket.Dispatched { border-left-color: var(--crash); }
+        .ticket.Resolved { border-left-color: #00C851; opacity: 0.7; }
+        .t-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+        .t-type { font-weight: 800; font-size: 15px; color: var(--dark); }
+        .t-time { font-size: 11px; color: #888; font-family: 'Roboto Mono', monospace; }
+        .t-details { font-size: 13px; color: #555; margin-bottom: 12px; }
+        .t-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .btn-act { border: none; padding: 10px; border-radius: 6px; font-weight: 700; font-size: 11px; cursor: pointer; text-transform: uppercase; }
+        .btn-dispatch { background: #FFF3E0; color: #EF6C00; border: 1px solid #FFE0B2; }
+        .btn-resolve { background: #E8F5E9; color: #2E7D32; border: 1px solid #C8E6C9; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="map-container">
+        <div class="stats-dock">
+            <div class="stat-card"><span class="stat-val" style="color:var(--fire)" id="stat-crit">0</span><span class="stat-label">Critical</span></div>
+            <div class="stat-card"><span class="stat-val" style="color:var(--crash)" id="stat-active">0</span><span class="stat-label">Active</span></div>
+            <div class="stat-card"><span class="stat-val" style="color:#00C851" id="stat-solved">0</span><span class="stat-label">Resolved</span></div>
+        </div>
+        <div id="map"></div>
+    </div>
+    <div id="sidebar">
+        <div class="dispatch-header"><div class="brand"><i class="fas fa-shield-alt"></i> DISPATCH</div><div class="live-badge"><div class="blink"></div> ONLINE</div></div>
+        <div class="feed-container" id="incident-feed"></div>
+    </div>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const FIXED_LAT = 15.352555; 
+        const FIXED_LNG = 75.081861;
+        const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+        const map = L.map('map', { zoomControl: false, layers: [streets] }).setView([FIXED_LAT, FIXED_LNG], 14);
+
+        async function fetchFeed() {
+            try {
+                const res = await fetch('/api/admin-feed');
+                const data = await res.json();
+                renderMap(data); renderSidebar(data); updateStats(data);
+            } catch (e) {}
+        }
+
+        function renderMap(data) {
+            map.eachLayer(l => { if(l instanceof L.Marker || l instanceof L.Circle) map.removeLayer(l); });
+            data.forEach(inc => {
+                if (inc.status === 'Resolved') return;
+                const color = inc.status === 'Dispatched' ? '#F57C00' : '#D32F2F';
+                L.circle([inc.lat, inc.lng], { color: color, fillColor: color, fillOpacity: 0.2, radius: 200 }).addTo(map);
+                const icon = L.divIcon({
+                    html: `<div style="background:${color}; color:white; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(0,0,0,0.3); border:2px solid white;"><i class="fas fa-exclamation"></i></div>`,
+                    className: 'map-pin', iconSize: [32, 32]
+                });
+                L.marker([inc.lat, inc.lng], {icon: icon}).addTo(map).bindPopup(`<b>${inc.type}</b><br>📞 ${inc.reporterPhone}`);
+            });
+        }
+
+        function renderSidebar(data) {
+            const feed = document.getElementById('incident-feed');
+            feed.innerHTML = '';
+            data.forEach(inc => {
+                let actions = inc.status === 'Pending' 
+                    ? `<button class="btn-act btn-dispatch" onclick="setStatus('${inc._id}', 'Dispatched')">DISPATCH UNIT</button>` 
+                    : (inc.status === 'Dispatched' ? `<button class="btn-act btn-resolve" onclick="setStatus('${inc._id}', 'Resolved')">MARK RESOLVED</button>` : 'CASE CLOSED');
+                
+                feed.innerHTML += `
+                    <div class="ticket ${inc.status}">
+                        <div class="t-header"><span class="t-type">${inc.type}</span><span class="t-time">${new Date(inc.timestamp).toLocaleTimeString()}</span></div>
+                        <div class="t-details">📞 ${inc.reporterPhone}</div>
+                        <div class="t-actions">${actions}</div>
+                    </div>`;
+            });
+        }
+
+        function updateStats(data) {
+            document.getElementById('stat-crit').innerText = data.filter(i => i.status === 'Pending').length;
+            document.getElementById('stat-active').innerText = data.filter(i => i.status === 'Dispatched').length;
+            document.getElementById('stat-solved').innerText = data.filter(i => i.status === 'Resolved').length;
+        }
+
+        async function setStatus(id, st) {
+            await fetch(`/api/update-status/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:st}) });
+            fetchFeed();
+        }
+        setInterval(fetchFeed, 2000); fetchFeed();
+    </script>
+</body>
+</html>

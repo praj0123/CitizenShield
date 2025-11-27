@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CitizenShield City Command</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #D32F2F; /* Emergency Red */
+            --accent: #2196F3;  /* Info Blue */
+            --surface: #ffffff;
+            --text-main: #202124;
+            --text-sub: #5f6368;
+            --shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        body { margin: 0; font-family: 'Inter', sans-serif; background: #f0f0f0; overflow: hidden; color: var(--text-main); }
+
+        /* --- MAP LAYER --- */
+        #map { height: 100vh; width: 100%; z-index: 1; }
+
+        /* --- FLOATING HEADER --- */
+        .header {
+            position: fixed; top: 15px; left: 15px; right: 15px; z-index: 1000;
+            background: var(--surface); padding: 12px 20px; border-radius: 12px;
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: var(--shadow);
+        }
+        .brand { font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+        .live-badge { background: #E8F5E9; color: #2E7D32; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+        .admin-icon { color: var(--text-sub); cursor: pointer; font-size: 18px; padding: 5px; }
+
+        /* --- BOTTOM CONTROLS --- */
+        .controls {
+            position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000;
+            display: flex; justify-content: center; gap: 15px; pointer-events: none;
+        }
+        .btn-fab {
+            pointer-events: auto;
+            background: var(--primary); color: white; border: none;
+            padding: 16px 32px; border-radius: 50px; font-size: 16px; font-weight: 600;
+            box-shadow: 0 6px 20px rgba(211, 47, 47, 0.4); cursor: pointer;
+            display: flex; align-items: center; gap: 10px; transition: transform 0.2s;
+        }
+        .btn-fab:active { transform: scale(0.96); }
+        .btn-sos { background: white; color: var(--primary); border: 2px solid #ffebee; }
+
+        /* --- CRITICAL ALERT OVERLAY --- */
+        #alert-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(211, 47, 47, 0.1); border: 8px solid var(--primary);
+            box-sizing: border-box; z-index: 900; pointer-events: none; display: none;
+        }
+        .alert-banner {
+            position: absolute; top: 80px; left: 50%; transform: translateX(-50%);
+            background: var(--primary); color: white; padding: 10px 20px;
+            border-radius: 50px; font-weight: 700; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            animation: pulse-red 1s infinite;
+        }
+        @keyframes pulse-red { 0% { transform: translateX(-50%) scale(1); } 50% { transform: translateX(-50%) scale(1.05); } 100% { transform: translateX(-50%) scale(1); } }
+
+        /* --- ADMIN SIDEBAR --- */
+        #sidebar {
+            position: fixed; top: 0; right: -400px; width: 350px; height: 100%;
+            background: var(--surface); z-index: 2000; transition: right 0.3s ease;
+            box-shadow: -5px 0 30px rgba(0,0,0,0.1); display: flex; flex-direction: column;
+        }
+        #sidebar.open { right: 0; }
+        
+        .sidebar-header { padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 15px; background: #fafafa; }
+        
+        /* Incident Cards */
+        .incident-card {
+            background: white; border-radius: 8px; padding: 15px; margin-bottom: 12px;
+            border: 1px solid #eee; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .incident-card h4 { margin: 0 0 5px 0; color: var(--text-main); }
+        .incident-card p { margin: 0; font-size: 13px; color: var(--text-sub); }
+        .status-tag { display: inline-block; font-size: 10px; font-weight: 700; padding: 3px 6px; border-radius: 4px; margin-bottom: 8px; }
+        .tag-red { background: #ffebee; color: #c62828; }
+        .tag-orange { background: #fff3e0; color: #ef6c00; }
+        
+        .btn-action { width: 100%; padding: 8px; margin-top: 10px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; }
+        .btn-dispatch { background: #fff3e0; color: #ef6c00; }
+        .btn-resolve { background: #e8f5e9; color: #2e7d32; }
+
+    </style>
+</head>
+<body>
+
+    <div id="alert-overlay">
+        <div class="alert-banner">⚠️ DANGER ZONE DETECTED</div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="header">
+        <div class="brand">
+            <i class="fas fa-shield-alt" style="color: var(--primary);"></i> CitizenShield
+            <span class="live-badge">● LIVE</span>
+        </div>
+        <div class="admin-icon" onclick="toggleSidebar()"><i class="fas fa-bars"></i></div>
+    </div>
+
+    <div class="controls">
+        <button class="btn-fab btn-sos" onclick="triggerSOS()">
+            <i class="fas fa-bell"></i> SOS
+        </button>
+        <button class="btn-fab" onclick="startReport()">
+            <i class="fas fa-plus"></i> REPORT HAZARD
+        </button>
+    </div>
+
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h3 style="margin:0">Dispatch Log</h3>
+            <i class="fas fa-times" style="cursor:pointer; color:#999;" onclick="toggleSidebar()"></i>
+        </div>
+        <div class="sidebar-content" id="incident-list">
+            </div>
+    </div>
+
+    <script>
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function beep() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.value = 800;
+            gain.gain.value = 0.1;
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+    </script>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // 1. MAP SETUP (OpenStreetMap Standard for Maximum Detail)
+        // Starts at a default location, updates immediately when GPS works
+        const map = L.map('map', { zoomControl: false }).setView([12.9716, 77.5946], 15);
+        
+        // Use Standard OSM for "Proper Road Tracing and Buildings"
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        let uLat = 0, uLng = 0;
+        let activeIncidents = [];
+        let mapCentered = false;
+
+        // 2. GPS TRACKING (High Accuracy Force)
+        if (navigator.geolocation) {
+            // Ask for location immediately
+            navigator.geolocation.getCurrentPosition(successGPS, errorGPS, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            });
+
+            // Keep watching for movement
+            navigator.geolocation.watchPosition(successGPS, errorGPS, {
+                enableHighAccuracy: true
+            });
+        } else {
+            Swal.fire('Error', 'GPS not supported by your browser', 'error');
+        }
+
+        function successGPS(pos) {
+            uLat = pos.coords.latitude;
+            uLng = pos.coords.longitude;
+            
+            // Auto-center map on first load
+            if(!mapCentered) {
+                map.setView([uLat, uLng], 17);
+                mapCentered = true;
+            }
+
+            // Remove old user pin
+            map.eachLayer(l => { if(l.options.icon && l.options.icon.options.className === 'user-pin') map.removeLayer(l); });
+
+            // Add new user pin (Blue Dot)
+            const userIcon = L.divIcon({
+                className: 'user-pin',
+                html: `<div style="width:16px; height:16px; background:#2196F3; border:3px solid white; border-radius:50%; box-shadow:0 0 15px #2196F3;"></div>`,
+                iconSize: [20, 20]
+            });
+            L.marker([uLat, uLng], { icon: userIcon }).addTo(map).bindPopup("<b>You are here</b>");
+            
+            checkDistance(); // Re-check danger zones
+        }
+
+        function errorGPS(err) {
+            console.warn(`GPS ERROR: ${err.message}`);
+            // Only alert once
+            if(!window.gpsErrorShown) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Location Blocked',
+                    text: 'Please allow Location Access in your browser settings (Top Left Lock Icon) to see your position.',
+                    confirmButtonColor: '#D32F2F'
+                });
+                window.gpsErrorShown = true;
+            }
+        }
+
+        // 3. DATA SYNC
+        async function refreshData() {
+            try {
+                const res = await fetch('/api/public-feed');
+                const data = await res.json();
+                activeIncidents = data;
+
+                // Clear Markers (Keep User Pin)
+                map.eachLayer(l => { 
+                    if(l instanceof L.Circle || (l instanceof L.Marker && l.options.icon.options.className !== 'user-pin')) {
+                        map.removeLayer(l); 
+                    }
+                });
+
+                data.forEach(inc => {
+                    const color = inc.status === 'Dispatched' ? '#FF9800' : '#D32F2F';
+                    
+                    // Professional Circle
+                    L.circle([inc.lat, inc.lng], {
+                        color: color, fillColor: color, fillOpacity: 0.2, radius: 250, weight: 1
+                    }).addTo(map);
+
+                    // Pin Icon
+                    const icon = L.divIcon({
+                        html: `<div style="background:${color}; color:white; width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 8px rgba(0,0,0,0.3); font-size:14px;"><i class="fas fa-exclamation"></i></div>`,
+                        className: 'map-pin', iconSize: [30, 30], iconAnchor: [15, 30]
+                    });
+                    L.marker([inc.lat, inc.lng], { icon: icon }).addTo(map)
+                        .bindPopup(`<b>${inc.type}</b><br><span style="color:#666">${inc.status}</span>`);
+                });
+
+                if(document.getElementById('sidebar').classList.contains('open')) loadAdmin();
+                checkDistance();
+            } catch (e) {
+                console.log("Server not connected yet.");
+            }
+        }
+
+        // 4. REPORTING
+        async function startReport() {
+            beep();
+            const { value: type } = await Swal.fire({
+                title: 'Report Incident',
+                input: 'select',
+                inputOptions: { 'Fire': 'Fire / Explosion', 'Accident': 'Traffic Accident', 'Medical': 'Medical Emergency' },
+                confirmButtonColor: '#D32F2F'
+            });
+
+            if(type) {
+                const { value: phone } = await Swal.fire({
+                    title: 'Verify Phone',
+                    input: 'tel',
+                    placeholder: '10-digit number',
+                    confirmButtonColor: '#D32F2F'
+                });
+                if(phone) {
+                    await fetch('/api/report', {
+                        method: 'POST', headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ type, severity:'red', lat:uLat, lng:uLng, reporterPhone:phone })
+                    });
+                    Swal.fire({ icon:'success', title:'Report Sent', timer:1500, showConfirmButton:false });
+                    refreshData();
+                }
+            }
+        }
+
+        // 5. ADMIN & DISTANCE LOGIC
+        async function loadAdmin() {
+            const res = await fetch('/api/admin-feed');
+            const data = await res.json();
+            const list = document.getElementById('incident-list');
+            list.innerHTML = '';
+            
+            data.forEach(inc => {
+                list.innerHTML += `
+                    <div class="incident-card">
+                        <span class="status-tag ${inc.status === 'Dispatched' ? 'tag-orange' : 'tag-red'}">${inc.status}</span>
+                        <h4>${inc.type}</h4>
+                        <p><i class="fas fa-phone"></i> ${inc.reporterPhone}</p>
+                        ${inc.status === 'Pending' 
+                            ? `<button class="btn-action btn-dispatch" onclick="setStatus('${inc._id}','Dispatched')">Dispatch</button>` 
+                            : `<button class="btn-action btn-resolve" onclick="setStatus('${inc._id}','Resolved')">Resolve</button>`}
+                    </div>
+                `;
+            });
+        }
+
+        async function setStatus(id, st) {
+            await fetch(`/api/update-status/${id}`, { 
+                method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:st}) 
+            });
+            refreshData();
+        }
+
+        function checkDistance() {
+            let danger = false;
+            activeIncidents.forEach(inc => {
+                const dist = map.distance([uLat, uLng], [inc.lat, inc.lng]);
+                // 500m Danger Zone. Only triggers if status is NOT Resolved
+                if(dist < 500 && inc.status !== 'Resolved') danger = true; 
+            });
+            document.getElementById('alert-overlay').style.display = danger ? 'block' : 'none';
+        }
+
+        function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); refreshData(); }
+        function triggerSOS() { window.open(`sms:?body=SOS! I need help at ${uLat},${uLng}`); }
+
+        setInterval(refreshData, 3000);
+        refreshData();
+    </script>
+</body>
+</html>
